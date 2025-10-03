@@ -1,24 +1,22 @@
 {
-"manifest_version": 3,
-"name": "48Rule: Gmail Response Timer",
-"version": "1.0",
-"description": "Helps users respond to emails faster by starting a 48-hour (or 24-hour) timer on new emails, specifically for Gmail.",
-"icons": {
-"16": "icon-16.png",
-"48": "icon-48.png",
-"128": "icon-128.png"
-},
-"action": {
-"default_popup": "popup.html",
-"default_icon": "icon-48.png"
-},
-"permissions": [
-"storage"
-],
-"content_scripts": [
-{
-"matches": ["://mail.google.com/"],
-"js": ["content.js"]
-}
-]
+    "manifest_version": 3,
+    "name": "48Rule: Gmail Response Timer",
+    "version": "1.0",
+    "description": "Helps users respond to emails faster by starting a 48-hour (or 24-hour) timer on new emails, specifically for Gmail.",
+    "icons": {
+        "16": "icon-16.png",
+        "48": "icon-48.png",
+        "128": "icon-128.png"
+    },
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": "icon-48.png"
+    },
+    "permissions": ["storage"],
+    "content_scripts": [
+        {
+            "matches": ["://mail.google.com/"],
+            "js": ["content.js"]
+        }
+    ]
 }
