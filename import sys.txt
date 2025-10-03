@@ -1,0 +1,5 @@
+import sys
+import os.path
+%pip install atlasopenmagic
+from atlasopenmagic import install_from_environment
+install_from_environment()
