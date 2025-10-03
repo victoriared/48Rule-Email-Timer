@@ -15,7 +15,7 @@
     "permissions": ["storage"],
     "content_scripts": [
         {
-            "matches": ["://mail.google.com/"],
+            "matches": ["*://mail.google.com/*"],
             "js": ["content.js"]
         }
     ]
