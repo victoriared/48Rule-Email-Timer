@@ -2,27 +2,27 @@
 // This script runs on mail.google.com and injects the 48Rule timer next to email subjects.
 
 // --- Configuration ---
-const GMAIL_INBOX_SELECTOR = 'div[role="main"]'; // Main container for the inbox view
-// Using a slightly more robust selector that includes the data-id attribute for better key retrieval
-const THREAD_ROW_SELECTOR = '.zA[data-legacy-thread-id]'; 
-const DATE_ELEMENT_SELECTOR = '.xW.xY'; // Element containing the date/time of the email
-const REPLY_INDICATOR_SELECTOR = '.fS'; // Indicator that an email has been replied to (e.g., 'Re: ')
+const GMAIL_INBOX_SELECTOR = 'div[role="main"]'; 
+const THREAD_ROW_SELECTOR = '.zA[data-legacy-thread-id]'; // Use a reliable selector for email thread rows
+const DATE_ELEMENT_SELECTOR = '.xW.xY'; 
+const REPLY_INDICATOR_SELECTOR = '.fS'; 
 const STORAGE_KEY = 'rule_start_times'; // Master key for storing all thread start times
-
-// Global variable to hold the preferred default timer duration (in milliseconds)
-let defaultTimerDurationMs = 48 * 60 * 60 * 1000;
 
 // --- Utility Functions ---
 
 /**
  * Loads the user's preferred default timer (24h or 48h) from Chrome storage.
+ * Returns a Promise that resolves with the duration in milliseconds.
  */
-const loadDefaultTimer = () => {
-    chrome.storage.sync.get('default_timer', (data) => {
-        const selectedRule = data.default_timer || '48';
-        const hours = parseInt(selectedRule, 10);
-        defaultTimerDurationMs = hours * 60 * 60 * 1000;
-        console.log(`48Rule: Timer set to ${hours} hours.`);
+const getTimerDuration = () => {
+    return new Promise(resolve => {
+        chrome.storage.sync.get('default_timer', (data) => {
+            const selectedRule = data.default_timer || '48';
+            const hours = parseInt(selectedRule, 10);
+            const durationMs = hours * 60 * 60 * 1000;
+            console.log(`48Rule: DEBUG: Timer duration loaded: ${hours} hours.`);
+            resolve(durationMs);
+        });
     });
 };
 
@@ -32,7 +32,6 @@ const loadDefaultTimer = () => {
  * @returns {string | null} The unique thread ID or null if not found.
  */
 const getThreadKey = (row) => {
-    // The data-legacy-thread-id attribute is typically stable for a thread.
     return row.getAttribute('data-legacy-thread-id');
 };
 
@@ -63,21 +62,27 @@ const formatTime = (ms) => {
 /**
  * Creates and starts the persistent timer element for a single email row.
  * @param {HTMLElement} row The email thread row element.
+ * @param {number} durationMs The timer duration in milliseconds (guaranteed to be loaded).
  */
-const injectTimer = (row) => {
+const injectTimer = (row, durationMs) => {
     const threadKey = getThreadKey(row);
 
-    // If we can't get a unique ID or timer already exists, exit
-    if (!threadKey || row.querySelector('.forty-eight-rule-timer')) {
+    if (!threadKey) {
+        // This is normal if a row is present without an ID yet
+        return; 
+    }
+    if (row.querySelector('.forty-eight-rule-timer')) {
+        // Timer is already running
         return;
     }
 
-    // Determine if the email is unread and not replied to
     const isUnread = row.classList.contains('zE');
     if (hasBeenRepliedTo(row) || !isUnread) {
-        // If replied or read, we might want to clean up storage later, but for now, just exit
+        // Do not track emails that have been replied to or are already read
         return;
     }
+
+    console.log(`48Rule: DEBUG: Attempting to inject timer for thread: ${threadKey}`);
 
     // Use Chrome Storage to manage persistence
     chrome.storage.sync.get(STORAGE_KEY, (data) => {
@@ -88,24 +93,27 @@ const injectTimer = (row) => {
         // 1. Check for existing start time
         if (timerStarts[threadKey]) {
             startTime = timerStarts[threadKey];
+            console.log(`48Rule: DEBUG: Existing timer loaded for ${threadKey}.`);
         } else {
             // 2. If no start time exists, save the current time and mark as new
             startTime = Date.now();
             timerStarts[threadKey] = startTime;
             isNewTimer = true;
+            console.log(`48Rule: DEBUG: New timer started and saved for ${threadKey}.`);
         }
 
-        // 3. Save the updated map back to storage (only necessary if it's a new timer)
+        // 3. Save the updated map back to storage (only if a new timer was started)
         if (isNewTimer) {
-             // We must first read the storage key again in case another script instance saved a time
-             // for a different thread between the initial get and this set operation.
              chrome.storage.sync.set({ [STORAGE_KEY]: timerStarts });
         }
         
-        // 4. Calculate end time based on the persistent start time
-        const endTime = startTime + defaultTimerDurationMs;
+        // 4. Calculate end time based on the persistent start time and the loaded duration
+        const endTime = startTime + durationMs;
         const dateElement = row.querySelector(DATE_ELEMENT_SELECTOR);
-        if (!dateElement) return;
+        if (!dateElement) {
+            console.log(`48Rule: ERROR: Could not find date element for thread ${threadKey}.`);
+            return;
+        }
 
         // 5. Create the timer element
         const timerEl = document.createElement('span');
@@ -138,6 +146,8 @@ const injectTimer = (row) => {
         // Start interval immediately and then every second
         updateTimer();
         const timerInterval = setInterval(updateTimer, 1000);
+        console.log(`48Rule: SUCCESS: Timer element INJECTED for ${threadKey}.`);
+
 
         // 8. Add a "X" button to manually dismiss the timer
         const dismissBtn = document.createElement('span');
@@ -145,15 +155,16 @@ const injectTimer = (row) => {
         dismissBtn.style.cssText = 'color: #aaa; cursor: pointer; margin-left: 5px; font-weight: normal;';
         dismissBtn.onclick = () => {
             timerEl.textContent = "DISMISSED";
-            timerEl.style.color = "#5f6368"; // Gray for dismissed
+            timerEl.style.color = "#5f6368"; 
             clearInterval(timerInterval);
             dismissBtn.remove();
             
-            // Optionally remove from storage upon dismissal
+            // Remove from storage upon dismissal
             chrome.storage.sync.get(STORAGE_KEY, (data) => {
                 let currentTimes = data[STORAGE_KEY] || {};
                 delete currentTimes[threadKey];
                 chrome.storage.sync.set({ [STORAGE_KEY]: currentTimes });
+                console.log(`48Rule: DEBUG: Timer dismissed and removed from storage: ${threadKey}`);
             });
         };
         timerEl.appendChild(dismissBtn);
@@ -162,19 +173,22 @@ const injectTimer = (row) => {
 
 /**
  * Main function to iterate over all thread rows and inject timers.
+ * This is now the entry point for all processing.
  * @param {HTMLElement} targetNode The element to search for email threads within.
+ * @param {number} durationMs The pre-loaded timer duration.
  */
-const processEmailThreads = (targetNode) => {
-    // Check if we are in an environment where we expect email threads (e.g., inbox list, not a single thread view)
+const processEmailThreads = (targetNode, durationMs) => {
+    console.log(`48Rule: DEBUG: processEmailThreads called (Duration: ${durationMs/3600000}h).`);
+    
     if (!targetNode || !document.location.hash.includes('#inbox')) {
         return;
     }
 
-    // We must reload the default timer preference before processing threads
-    loadDefaultTimer(); 
-
     const emailRows = targetNode.querySelectorAll(THREAD_ROW_SELECTOR);
-    emailRows.forEach(injectTimer);
+    console.log(`48Rule: DEBUG: Found ${emailRows.length} potential email rows.`);
+    
+    // Inject timer, passing the guaranteed duration
+    emailRows.forEach(row => injectTimer(row, durationMs));
 };
 
 
@@ -183,41 +197,36 @@ const processEmailThreads = (targetNode) => {
 /**
  * Sets up the MutationObserver to watch for dynamic changes in the Gmail DOM.
  */
-const setupMutationObserver = () => {
+const setupMutationObserver = (durationMs) => {
     const inboxContainer = document.querySelector(GMAIL_INBOX_SELECTOR);
 
     if (!inboxContainer) {
-        // If we can't find the main container, wait a bit and try again.
-        setTimeout(setupMutationObserver, 500);
+        // Try again if the main container isn't ready
+        setTimeout(() => setupMutationObserver(durationMs), 500);
         return;
     }
 
-    // Process threads immediately upon script load
-    processEmailThreads(inboxContainer);
+    // Process threads immediately upon script load, passing the duration
+    processEmailThreads(inboxContainer, durationMs);
 
-    // Set up the observer configuration
     const config = { childList: true, subtree: true };
 
-    // Callback function to execute when mutations are observed
     const callback = (mutationsList, observer) => {
         for (const mutation of mutationsList) {
-            // We only care about new nodes being added (like when a new email list is rendered)
             if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                // Since the change could be deep within the DOM tree, we process all new nodes
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === 1 && node.matches(THREAD_ROW_SELECTOR)) {
-                         // Found a new email row directly added, inject timer
-                        injectTimer(node);
+                        // Found a new email row directly added
+                        injectTimer(node, durationMs);
                     } else if (node.nodeType === 1 && node.querySelector(THREAD_ROW_SELECTOR)) {
-                        // Found a container that holds email rows, process all inside it
-                        processEmailThreads(node);
+                        // Found a container that holds email rows
+                        processEmailThreads(node, durationMs);
                     }
                 });
             }
         }
     };
 
-    // Create and start the observer
     const observer = new MutationObserver(callback);
     observer.observe(inboxContainer, config);
     console.log("48Rule: Mutation Observer started on Gmail inbox.");
@@ -226,18 +235,29 @@ const setupMutationObserver = () => {
 
 // --- Initialization ---
 
-// The `loadDefaultTimer` is now called inside `processEmailThreads` for reliability.
+/**
+ * Main entry point: Loads duration, then starts observer/processing.
+ */
+const initializeExtension = () => {
+    // 1. Get the timer duration (this must happen first and is a promise)
+    getTimerDuration()
+        .then(durationMs => {
+            // 2. Once duration is loaded, start the DOM watcher
+            setupMutationObserver(durationMs);
+        });
+};
 
-// 1. Start watching the page for dynamic content changes
-// Wait briefly for the main Gmail structure to load
-window.addEventListener('load', () => {
-    setupMutationObserver();
-});
 
-// 2. Also re-run the process when the hash (URL section after #) changes,
-// which indicates navigation between folders (e.g., from Inbox to Sent).
+// Wait for the full page to load
+window.addEventListener('load', initializeExtension);
+
+// Also re-run processing on hashchange (navigation)
 window.addEventListener('hashchange', () => {
-    setTimeout(() => {
-        processEmailThreads(document.querySelector(GMAIL_INBOX_SELECTOR));
-    }, 500); // Give Gmail a moment to render the new list
+    // Reload duration first, then process
+    getTimerDuration()
+        .then(durationMs => {
+            setTimeout(() => {
+                processEmailThreads(document.querySelector(GMAIL_INBOX_SELECTOR), durationMs);
+            }, 500); // Wait for Gmail to render the new folder content
+        });
 });
